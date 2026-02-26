@@ -1110,6 +1110,7 @@ if __name__ == "__main__":
     token = os.getenv('DISCORD_TOKEN')
     if token:
         print("🚀 Starting Discord bot...")
+        time.sleep(5) 
         bot.run(token)
     else:
         print("❌ ERROR: DISCORD_TOKEN not found in Environment Variables!")
