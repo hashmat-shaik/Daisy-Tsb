@@ -19,7 +19,7 @@ from time import sleep
 from lb_image_gen import draw_leaderboard, draw_streak_leaderboard
 from repDataBase import setupRepDB, add_rep
 from fun_replies import check_humor
-from tasksDataBase import setupTaskDB, getUserData, SaveUserTasks
+from tasksDataBase import setupTaskDB, getUserData, SaveUserTasks, setupTodoDB, getTodoData, saveTodoData, getUserTodoPendingCount, clearAllUserTodos
 from excludedChannels import setupExChannelDB, getExChannel, addChannel
 from timeDataBase import (setupTimeDB, getUserTime, SaveUserTime, get_leaderboard_data, 
                           get_streak_leaderboard, getUserDailyTime, get_streak_info, 
@@ -900,7 +900,9 @@ async def midnight_maintenance():
             else:
                 journal_done = all(t.get('completed', False) for t in journal_tasks)
                 daily_done = all(t.get('completed', False) for t in daily_tasks)
-                is_eligible = journal_done and daily_done
+                # Also fail streak if the user has any unfinished todo tasks
+                todo_pending = getUserTodoPendingCount(userID)
+                is_eligible = journal_done and daily_done and (todo_pending == 0)
 
             if is_eligible:
                 time_cursor.execute('''
@@ -923,6 +925,9 @@ async def midnight_maintenance():
             
             new_tasks_data = json.dumps({"journal": journal_tasks, "daily": []})
             task_cursor.execute("UPDATE userTasks SET tasks = ? WHERE userID = ?", (new_tasks_data, userID))
+
+            # Reset todo lists for this user (pending moved to completed, then both cleared next day)
+            clearAllUserTodos(userID)
             
         except Exception as e:
             print(f"Error processing user {userID}: {e}")
@@ -991,6 +996,77 @@ async def post_daily_streak():
         print(f"Error generating daily streak: {e}")
 
 # ==========================================
+#  TODO LIST SYSTEM
+# ==========================================
+
+def _next_todo_id(user_todo: dict) -> str:
+    """Return next unused zero-padded 3-digit ID."""
+    used = {t["id"] for t in user_todo["pending"] + user_todo["completed"]}
+    n = 1
+    while True:
+        candidate = f"{n:03d}"
+        if candidate not in used:
+            return candidate
+        n += 1
+
+def build_todo_embed(user, user_todo: dict) -> discord.Embed:
+    pending   = user_todo["pending"]
+    completed = user_todo["completed"]
+
+    tick  = CUSTOM_EMOJIS["tick"]
+    cross = CUSTOM_EMOJIS["cross"]
+
+    embed = discord.Embed(
+        title=f"📋 {user.display_name}'s To-Do List",
+        color=discord.Color.blue(),
+        timestamp=datetime.now(timezone.utc)
+    )
+    embed.set_author(name=user.display_name, icon_url=user.display_avatar.url)
+
+    if pending:
+        embed.add_field(
+            name="Pending",
+            value="\n".join(f"{cross} `{t['id']}` {t['name']}" for t in pending),
+            inline=False
+        )
+    else:
+        embed.add_field(name="Pending", value="*No pending tasks!*", inline=False)
+
+    if completed:
+        embed.add_field(
+            name="Completed",
+            value="\n".join(f"{tick} ~~`{t['id']}` {t['name']}~~" for t in completed),
+            inline=False
+        )
+
+    embed.set_footer(text="[-] task to add  •  [x] 001 or [x] task name to complete")
+    return embed
+
+@bot.tree.command(name="cleartodo", description="Clear your to-do list in this channel")
+@app_commands.describe(what="What to clear")
+@app_commands.choices(what=[
+    app_commands.Choice(name="All tasks", value="all"),
+    app_commands.Choice(name="Completed only", value="completed"),
+])
+async def cleartodo(interaction: discord.Interaction, what: app_commands.Choice[str] = None):
+    clear = what.value if what else "all"
+    user_todo = getTodoData(interaction.channel.id, interaction.user.id)
+
+    if not user_todo["pending"] and not user_todo["completed"]:
+        return await interaction.response.send_message("You have no to-do list here!", ephemeral=True)
+
+    if clear == "all":
+        user_todo["pending"]   = []
+        user_todo["completed"] = []
+    elif clear == "completed":
+        user_todo["completed"] = []
+
+    saveTodoData(interaction.channel.id, interaction.user.id, user_todo)
+    embed = build_todo_embed(interaction.user, user_todo)
+    await interaction.channel.send(embed=embed)
+    await interaction.response.send_message("✅ To-do list cleared!", ephemeral=True)
+
+# ==========================================
 #  MESSAGE HANDLER (REP SYSTEM)
 # ==========================================
 @bot.event
@@ -1048,6 +1124,56 @@ async def on_message(message):
             except Exception as e:
                 print(f"Error in rep system: {e}")
 
+    # ---- TODO LIST PARSING ----
+    lines = message.content.strip().splitlines()
+    new_pending   = []
+    new_completed = []
+
+    for line in lines:
+        line = line.strip()
+        pm = re.match(r"^\[-\]\s+(.+)$", line, re.IGNORECASE)
+        cm = re.match(r"^\[x\]\s+(.+)$", line, re.IGNORECASE)
+        if pm:
+            new_pending.append(pm.group(1).strip())
+        elif cm:
+            new_completed.append(cm.group(1).strip())
+
+    if new_pending or new_completed:
+        try:
+            await message.delete()
+        except Exception:
+            pass
+
+        user_todo = getTodoData(message.channel.id, message.author.id)
+
+        # Add new tasks (skip duplicates)
+        existing_names = {t["name"].lower() for t in user_todo["pending"] + user_todo["completed"]}
+        for task_name in new_pending:
+            if task_name.lower() not in existing_names:
+                task_id = _next_todo_id(user_todo)
+                user_todo["pending"].append({"id": task_id, "name": task_name})
+                existing_names.add(task_name.lower())
+
+        # Complete tasks by ID or name (pending only)
+        for raw in new_completed:
+            id_match = re.fullmatch(r"0*(\d{1,3})", raw.strip())
+            if id_match:
+                norm_id = f"{int(id_match.group(1)):03d}"
+                task = next((t for t in user_todo["pending"] if t["id"] == norm_id), None)
+            else:
+                task = next((t for t in user_todo["pending"] if t["name"].lower() == raw.lower()), None)
+
+            if task:
+                user_todo["pending"].remove(task)
+                if not any(c["id"] == task["id"] for c in user_todo["completed"]):
+                    user_todo["completed"].append(task)
+
+        saveTodoData(message.channel.id, message.author.id, user_todo)
+        embed = build_todo_embed(message.author, user_todo)
+        await message.channel.send(embed=embed)
+        return  # skip rep / humor checks for todo messages
+    # ---- END TODO LIST PARSING ----
+
     await check_humor(message)
     await bot.process_commands(message)
 
@@ -1061,6 +1187,7 @@ async def on_ready():
     # Setup databases
     setupTimeDB()
     setupTaskDB()
+    setupTodoDB()
     setupExChannelDB()
     setupRepDB()
     
@@ -1115,6 +1242,3 @@ if __name__ == "__main__":
         bot.run(token)
     else:
         print("❌ ERROR: DISCORD_TOKEN not found in Environment Variables!")
-
-
-#
