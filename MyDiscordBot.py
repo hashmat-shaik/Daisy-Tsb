@@ -12,6 +12,7 @@ import aiohttp
 from flask import Flask
 from discord.ext import commands, tasks
 from discord import app_commands
+from time import sleep
 
 # Import your custom modules
 
@@ -1110,7 +1111,7 @@ if __name__ == "__main__":
     token = os.getenv('DISCORD_TOKEN')
     if token:
         print("🚀 Starting Discord bot...")
-        time.sleep(5) 
+        sleep(5) 
         bot.run(token)
     else:
         print("❌ ERROR: DISCORD_TOKEN not found in Environment Variables!")
