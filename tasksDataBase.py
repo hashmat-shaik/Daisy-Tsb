@@ -1,25 +1,20 @@
-import sqlite3
+from db_helper import get_connection
 import json
 
 def setupTaskDB():
-    #creating a database for tasks and naming it userTaskList
-    connection = sqlite3.connect('userTaskList.db')
-
-    #creating a cursor to navigate
+    connection = get_connection()
     cursor = connection.cursor()
-
-    #creating a table to store user id and their task data
-    taskcreate = '''
+    cursor.execute('''
     CREATE TABLE IF NOT EXISTS
     userTasks(userID INTEGER PRIMARY KEY, tasks TEXT)
-    '''
-    cursor.execute(taskcreate)
+    ''')
     connection.commit()
+    connection.sync()
     connection.close()
-    
+
 
 def getUserData(userID):
-    connection = sqlite3.connect('userTaskList.db')
+    connection = get_connection()
     cursor = connection.cursor()
     cursor.execute('SELECT tasks FROM userTasks WHERE userID = ?', (userID,))
     result = cursor.fetchone()
@@ -33,11 +28,9 @@ def getUserData(userID):
     try:
         loaded_data = json.loads(result[0])
         
-        # Migration: Convert flat list to dict if needed
         if isinstance(loaded_data, list):
             loaded_data = {"journal": loaded_data, "daily": []}
         
-        # Validation: Ensure keys exist
         if "journal" not in loaded_data: loaded_data["journal"] = []
         if "daily" not in loaded_data: loaded_data["daily"] = []
 
@@ -45,14 +38,13 @@ def getUserData(userID):
 
     except json.JSONDecodeError:
         print(f"⚠️ DATA CORRUPTION WARNING: User {userID} has broken JSON.")
-        # Return default to avoid crash, BUT we should ideally backup the bad data
         return default_structure
 
+
 def SaveUserTasks(userID, journal_tasks, daily_tasks):
-    connection = sqlite3.connect('userTaskList.db')
+    connection = get_connection()
     cursor = connection.cursor()
     
-    # Combine them back into the dictionary format for storage
     tasks_dict = {
         "journal": journal_tasks,
         "daily": daily_tasks
@@ -66,4 +58,5 @@ def SaveUserTasks(userID, journal_tasks, daily_tasks):
     ''', (userID, tasks_json))
     
     connection.commit()
+    connection.sync()
     connection.close()

@@ -4,3 +4,4 @@ token.txt
 __pycache__/
 *.db
 .env
+db_token.txt

@@ -2,3 +2,4 @@ discord.py
 aiohttp
 pillow
 flask
+libsql-experimental

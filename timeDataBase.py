@@ -1,103 +1,88 @@
-import sqlite3
+from db_helper import get_connection
 import json
 
 def setupTimeDB():
-    connection = sqlite3.connect('userTimeUsage.db')
-
+    connection = get_connection()
     cursor = connection.cursor()
     
     cursor.execute('''
     CREATE TABLE IF NOT EXISTS
     userTime(userID INTEGER PRIMARY KEY, time REAL DEFAULT 0, daily_time REAL DEFAULT 0)
     ''')
-    
-    
 
-    # Add new Streak and Season columns safely
     new_columns = [
         ("current_streak", "INTEGER DEFAULT 0"),
         ("streak_status", "TEXT DEFAULT 'INACTIVE'"),
-        ("last_completion_date", "TEXT"), # Stores YYYY-MM-DD
+        ("last_completion_date", "TEXT"),
         ("season_id", "INTEGER DEFAULT 1")
     ]
     
     for col_name, col_type in new_columns:
         try:
             cursor.execute(f'ALTER TABLE userTime ADD COLUMN {col_name} {col_type}')
-        except sqlite3.OperationalError:
+        except Exception:
             pass
 
-    # Add the daily_time column if it doesn't exist (for existing databases)
     try:
         cursor.execute('ALTER TABLE userTime ADD COLUMN daily_time REAL DEFAULT 0')
-    except sqlite3.OperationalError:
+    except Exception:
         pass
 
     connection.commit()
+    connection.sync()
     connection.close()
 
+
 def getUserTime(userID):
-    connection = sqlite3.connect('userTimeUsage.db')
+    connection = get_connection()
     cursor = connection.cursor()
     cursor.execute('SELECT time FROM userTime WHERE userID = ?', (userID,))
     result = cursor.fetchone()
     connection.close()
+    return result[0] if result else 0
 
-    if result == None:
-        return 0
-    else:
-        return result[0]
-    
+
 def getUserDailyTime(userID):
-    connection = sqlite3.connect('userTimeUsage.db')
+    connection = get_connection()
     cursor = connection.cursor()
     cursor.execute('SELECT daily_time FROM userTime WHERE userID = ?', (userID,))
     result = cursor.fetchone()
     connection.close()
-
-    if result == None:
-        return 0
-    else:
-        return result[0]
+    return result[0] if result else 0
 
 
 def SaveUserTime(userID, duration):
-    connection = sqlite3.connect('userTimeUsage.db')
+    connection = get_connection()
     cursor = connection.cursor()
 
-    # 1. Update (or Insert) TOTAL Time
-    # We try to update first. If no row exists, we insert.
     cursor.execute('UPDATE userTime SET time = time + ? WHERE userID = ?', (duration, userID))
     
-    # If the row didn't exist (changes == 0), we create it
     if cursor.rowcount == 0:
         cursor.execute('INSERT INTO userTime (userID, time, daily_time) VALUES (?, ?, ?)', (userID, duration, duration))
     else:
-        # 2. Update DAILY Time
-        # We only need to run this if the user already existed (because the INSERT above handles both)
         cursor.execute('UPDATE userTime SET daily_time = daily_time + ? WHERE userID = ?', (duration, userID))
 
     connection.commit()
+    connection.sync()
     connection.close()
 
-def get_leaderboard_data(lbtype,offset=0):
-    """Fetches 10 users from the database, starting after the offset."""
-    connection = sqlite3.connect('userTimeUsage.db')
+
+def get_leaderboard_data(lbtype, offset=0):
+    connection = get_connection()
     cursor = connection.cursor()
     
-    # The '?' is a placeholder for the offset value
     if lbtype == "daily":
         cursor.execute('SELECT userID, daily_time FROM userTime ORDER BY daily_time DESC LIMIT 10 OFFSET ?', (offset,))
-        result = cursor.fetchall()
     elif lbtype == "all time":
         cursor.execute('SELECT userID, time FROM userTime ORDER BY time DESC LIMIT 10 OFFSET ?', (offset,))
-        result = cursor.fetchall()
     
+    result = cursor.fetchall()
     connection.close()
     return result
 
+
 def get_streak_info(userID):
-    connection = sqlite3.connect('userTimeUsage.db')
+    connection = get_connection()
     cursor = connection.cursor()
     cursor.execute('SELECT current_streak, streak_status, last_completion_date FROM userTime WHERE userID = ?', (userID,))
     result = cursor.fetchone()
@@ -107,10 +92,10 @@ def get_streak_info(userID):
         return {"streak": result[0], "status": result[1], "last_date": result[2]}
     return {"streak": 0, "status": 'INACTIVE', "last_date": None}
 
+
 def get_streak_leaderboard():
-    connection = sqlite3.connect('userTimeUsage.db')
+    connection = get_connection()
     cursor = connection.cursor()
-    # Filter for active streaks and sort by the highest number
     cursor.execute('''
         SELECT userID, current_streak 
         FROM userTime 
@@ -121,31 +106,26 @@ def get_streak_leaderboard():
     connection.close()
     return result
 
+
 def reset_seasonal_streaks():
-    connection = sqlite3.connect('userTimeUsage.db')
+    connection = get_connection()
     cursor = connection.cursor()
-    
-    # 1. Reset all streaks to 0
-    # 2. Set all statuses to INACTIVE so they can redefine tasks
     cursor.execute('''
         UPDATE userTime 
         SET current_streak = 0, 
             streak_status = 'INACTIVE', 
             last_completion_date = NULL
     ''')
-    
     connection.commit()
+    connection.sync()
     connection.close()
     print("Season has been reset. All streaks are now 0.")
+
+
 def get_contextual_data(target_user_id, lb_mode='daily'):
-    """
-    Fetches Top 3 + 7 Contextual Users (Total 10) to fill the leaderboard.
-    Logic: Show 2 users above target (if possible) and fill the rest below.
-    """
-    connection = sqlite3.connect('userTimeUsage.db')
+    connection = get_connection()
     cursor = connection.cursor()
     
-    # 1. Select data based on mode
     if lb_mode == 'daily':
         cursor.execute('SELECT userID, daily_time FROM userTime WHERE daily_time > 0 ORDER BY daily_time DESC')
     else:
@@ -158,55 +138,29 @@ def get_contextual_data(target_user_id, lb_mode='daily'):
     if total_users == 0:
         return [], 0
 
-    # 2. Find target user's index (0-based)
-    # Create a list of IDs to find index easily
     user_ids = [row[0] for row in all_data]
-    
-    target_index = -1
-    if target_user_id in user_ids:
-        target_index = user_ids.index(target_user_id)
+    target_index = user_ids.index(target_user_id) if target_user_id in user_ids else -1
 
-    # 3. Determine Indices to Fetch
     indices_to_fetch = set()
     
-    # --- A. ALWAYS GET TOP 3 ---
     for i in range(min(3, total_users)):
         indices_to_fetch.add(i)
 
-    # --- B. DETERMINE THE LIST VIEW (7 Slots) ---
-    # We have 7 slots to fill (Visual Slots 4-10)
     slots_available = 7
     
     if target_index == -1:
-        # Scenario: User not on board (hasn't studied).
-        # Just fill the remaining 7 slots with Ranks 4-10.
         start_slice = 3
     else:
-        # Scenario: User is on the board.
-        # We want to show 2 people ABOVE the user (index - 2).
-        # But we cannot start earlier than index 3 (because 0,1,2 are Top 3).
         desired_start = target_index - 2
         start_slice = max(3, desired_start)
     
-    # --- C. SHIFT WINDOW IF NEAR BOTTOM ---
-    # If starting here means we run out of users before filling 7 slots,
-    # shift the start window UP to fill the empty space.
-    # Example: Total 10 users. User is Rank 10. Start 8. slice 8-15 (Too far).
-    # Correct: Start 3. Slice 3-10.
-    
-    # Calculate the maximum possible start index that ensures we have 'slots_available' items
-    # (or as many as possible if total < 10)
     max_start = max(3, total_users - slots_available)
-    
-    # Clamp the start_slice
     start_slice = min(start_slice, max_start)
     
-    # --- D. ADD INDICES TO SET ---
     for i in range(start_slice, start_slice + slots_available):
         if i < total_users:
             indices_to_fetch.add(i)
 
-    # 4. Build Result
     sorted_indices = sorted(list(indices_to_fetch))
     result_data = []
     
