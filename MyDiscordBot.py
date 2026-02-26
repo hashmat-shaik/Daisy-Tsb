@@ -325,7 +325,7 @@ class LeaderboardView(discord.ui.View):
                     ephemeral=True
                 )
 
-            async with aiohttp.ClientSession() as session:
+            async with aiohttp.ClientSession(headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36", "Referer": "https://discord.com/"}) as session:
                 for rank, uid, seconds in ranked_data:
                     user = interaction.client.get_user(uid)
                     if not user:
@@ -381,7 +381,7 @@ class LeaderboardView(discord.ui.View):
                     ephemeral=True
                 )
 
-            async with aiohttp.ClientSession() as session:
+            async with aiohttp.ClientSession(headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36", "Referer": "https://discord.com/"}) as session:
                 for user_id, seconds in raw_data:
                     user = interaction.client.get_user(user_id)
                     if not user:
@@ -451,7 +451,7 @@ async def img_leaderboard(interaction: discord.Interaction, lb_type: app_command
 
     processed_users = []
     
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36", "Referer": "https://discord.com/"}) as session:
         for user_id, seconds in raw_data:
             user = bot.get_user(user_id)
             if not user:
@@ -556,7 +556,7 @@ async def daily_leaderboard(interaction: discord.Interaction):
 
     processed_users = []
     
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36", "Referer": "https://discord.com/"}) as session:
         for rank, uid, seconds in ranked_data:
             user = bot.get_user(uid)
             if not user:
@@ -691,8 +691,8 @@ class TaskButtonsView(discord.ui.View):
     async def on_timeout(self):
         for item in self.children:
             item.disabled = True
-            if self.message:
-                await self.message.edit(view=self)
+        if self.message:
+            await self.message.edit(view=self)
 
        
 
