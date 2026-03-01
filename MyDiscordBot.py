@@ -258,7 +258,7 @@ Server Rank = {get_user_rank(lbtype="all time", userID=interaction.user.id)}
         color=discord.Color.red(),
         description=desp
     )
-    profileEmbed.set_thumbnail(url=interaction.user.avatar)
+    profileEmbed.set_thumbnail(url=interaction.user.display_avatar.url)
     profileEmbed.add_field(name="XP", value=f"{pAch*solid_square+((10-pAch)*hollow_square)}", inline=False)
     profileEmbed.add_field(name="Today Study Time", value=f"Total Time: {str(timedelta(seconds=int(getUserDailyTime(interaction.user.id))))}", inline=False)
     profileEmbed.add_field(name="Total Study Time", value=f"Total Time: {str(timedelta(seconds=int(getUserTime(interaction.user.id))))}", inline=False)
@@ -280,7 +280,7 @@ async def on_voice_state_update(member, before, after):
     was_tracking = userID in voiceTrack
     is_now_tracking = (after.channel is not None) and (after.channel.id not in exChannels)
 
-    if was_tracking and (not is_now_tracking or before.channel.id != after.channel.id):
+    if was_tracking and (not is_now_tracking or (before.channel and before.channel.id != after.channel.id)):
         joinTime = voiceTrack.pop(userID)
         leaveTime = datetime.now(timezone.utc)
         duration = (leaveTime - joinTime).total_seconds()
@@ -688,6 +688,7 @@ class TaskButtonsView(discord.ui.View):
     def __init__(self, author_id):
         super().__init__(timeout=3600)  # increase timeout
         self.author_id = author_id
+        self.message = None
     async def on_timeout(self):
         for item in self.children:
             item.disabled = True

@@ -6,7 +6,7 @@ def setupExChannelDB():
     cursor = connection.cursor()
     createTable = '''
     CREATE TABLE IF NOT EXISTS
-    exchannels(serverID INTEGER PRIMARY KEY, channels INT)
+    exchannels(serverID INTEGER PRIMARY KEY, channels TEXT)
     '''
     cursor.execute(createTable)
     connection.commit()
