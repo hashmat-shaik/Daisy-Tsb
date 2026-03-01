@@ -725,21 +725,29 @@ class LeaderboardView(discord.ui.View):
         if new_type == self.lb_type:
             return await interaction.response.defer()
 
+        await interaction.response.defer()   # acknowledge immediately — prevents "Interaction failed"
         self.lb_type = new_type
         self._update_buttons()
-        await self._edit(interaction)
+        await self._do_edit(interaction)
 
     async def refresh(self, interaction: discord.Interaction):
-        await self._edit(interaction)
+        await interaction.response.defer()
+        await self._do_edit(interaction)
 
     async def _edit(self, interaction: discord.Interaction):
+        # Legacy entry point — defer then edit
         await interaction.response.defer()
+        await self._do_edit(interaction)
+
+    async def _do_edit(self, interaction: discord.Interaction):
+        """Core edit logic — always called AFTER the interaction has been deferred."""
         file, header = await _build_leaderboard_image(interaction.client, self.lb_type, self.author_id)
 
         if file is None:
             return await interaction.followup.send("No data available yet!", ephemeral=True)
 
-        await interaction.message.edit(content=header, attachments=[file], view=self)
+        # edit_original_response works correctly after defer(), unlike message.edit()
+        await interaction.edit_original_response(content=header, attachments=[file], view=self)
 
     async def on_timeout(self):
         for item in self.children:
@@ -757,6 +765,7 @@ class _TabButton(discord.ui.Button):
         self.lb_type = lb_type
 
     async def callback(self, interaction: discord.Interaction):
+        # switch_to handles defer internally
         await self.view.switch_to(interaction, self.lb_type)
 
 
@@ -765,6 +774,7 @@ class _RefreshButton(discord.ui.Button):
         super().__init__(label="🔄 Refresh", style=discord.ButtonStyle.secondary, row=1)
 
     async def callback(self, interaction: discord.Interaction):
+        # refresh handles defer internally
         await self.view.refresh(interaction)
 
 

@@ -335,25 +335,36 @@ def get_last_7_days(userID: int) -> list[tuple[str, float]]:
 
 def get_weekly_leaderboard(offset: int = 0) -> list[tuple[int, float]]:
     """
-    Returns top 10 users ranked by total study seconds over the last 7 days,
-    pulled from the daily history snapshots.
+    Returns top 10 users ranked by total study seconds over the last 7 days.
+    Combines completed-day snapshots (userDailyHistory) with today's live
+    daily_time so the leaderboard is always up to date when flushed.
     Returns [(userID, total_seconds), ...].
     """
+    from datetime import datetime, timedelta
     connection = sqlite3.connect('userTimeUsage.db')
     cursor = connection.cursor()
 
-    # Calculate the date 7 days ago
-    from datetime import datetime, timedelta
+    today = datetime.utcnow().strftime('%Y-%m-%d')
     cutoff = (datetime.utcnow() - timedelta(days=7)).strftime('%Y-%m-%d')
 
+    # Sum past snapshots (excludes today — today is in daily_time, not yet snapshotted)
+    # UNION with today's live daily_time so flushed time is immediately visible
     cursor.execute('''
-        SELECT userID, SUM(seconds) as total
-        FROM userDailyHistory
-        WHERE date >= ?
+        SELECT userID, SUM(seconds) as total FROM (
+            SELECT userID, seconds
+            FROM userDailyHistory
+            WHERE date >= ? AND date < ?
+
+            UNION ALL
+
+            SELECT userID, daily_time AS seconds
+            FROM userTime
+            WHERE daily_time > 0
+        )
         GROUP BY userID
         ORDER BY total DESC
         LIMIT 10 OFFSET ?
-    ''', (cutoff, offset))
+    ''', (cutoff, today, offset))
 
     result = cursor.fetchall()
     connection.close()
@@ -361,30 +372,39 @@ def get_weekly_leaderboard(offset: int = 0) -> list[tuple[int, float]]:
 
 
 def get_weekly_rank(userID: int) -> int:
-    """Returns the user's rank on the weekly leaderboard (1-based)."""
+    """Returns the user's rank on the weekly leaderboard (1-based).
+    Includes today's live daily_time same as get_weekly_leaderboard."""
     from datetime import datetime, timedelta
+    today  = datetime.utcnow().strftime('%Y-%m-%d')
     cutoff = (datetime.utcnow() - timedelta(days=7)).strftime('%Y-%m-%d')
 
     connection = sqlite3.connect('userTimeUsage.db')
     cursor = connection.cursor()
 
-    # Get the user's total for the week
+    # User's own weekly total (past days + today)
     cursor.execute('''
-        SELECT SUM(seconds) FROM userDailyHistory
-        WHERE userID = ? AND date >= ?
-    ''', (userID, cutoff))
+        SELECT SUM(seconds) FROM (
+            SELECT seconds FROM userDailyHistory
+            WHERE userID = ? AND date >= ? AND date < ?
+            UNION ALL
+            SELECT daily_time FROM userTime WHERE userID = ?
+        )
+    ''', (userID, cutoff, today, userID))
     result = cursor.fetchone()
     user_total = result[0] if result and result[0] else 0
 
-    # Count how many users scored higher
+    # Count users ranked higher
     cursor.execute('''
         SELECT COUNT(*) FROM (
-            SELECT userID, SUM(seconds) as total
-            FROM userDailyHistory
-            WHERE date >= ?
+            SELECT userID, SUM(seconds) as total FROM (
+                SELECT userID, seconds FROM userDailyHistory
+                WHERE date >= ? AND date < ?
+                UNION ALL
+                SELECT userID, daily_time FROM userTime WHERE daily_time > 0
+            )
             GROUP BY userID
         ) WHERE total > ?
-    ''', (cutoff, user_total))
+    ''', (cutoff, today, user_total))
     ahead = cursor.fetchone()[0]
     connection.close()
     return ahead + 1
