@@ -25,7 +25,9 @@ from tagsDataBase import (setupTagsDB, getUserTags, addUserTag, removeUserTag,
                           getActiveTag, setActiveTag, clearActiveTag)
 from timeDataBase import (setupTimeDB, getUserTime, SaveUserTime, get_leaderboard_data,
                           get_streak_leaderboard, getUserDailyTime, get_streak_info,
-                          get_contextual_data, setupTagTimeDB, SaveUserTimeByTag, getUserTagTimes)
+                          get_contextual_data, setupTagTimeDB, SaveUserTimeByTag, getUserTagTimes,
+                          setupDailyHistoryDB, snapshotDailyTime, get_last_7_days)
+from daily_report_gen import generate_stats_image
 
 # Bot setup
 bot = commands.Bot(command_prefix="!", intents=discord.Intents.all())
@@ -1156,6 +1158,91 @@ async def streak_img_lb(interaction: discord.Interaction):
         # Catch any other logic errors (like database connection failing)
         print(f"❌ CRITICAL ERROR: {e}")
         await interaction.followup.send(f"An error occurred: {str(e)}")
+MOTIVATIONAL_LINES = [
+    "Every hour you put in today is a brick.\nYou might not see the building yet — but it's going up. 🏗️",
+    "Whether today was a 10/10 grind or barely getting through — you showed up.\nThat already puts you ahead. 💪",
+    "Consistency over intensity. Keep stacking the days. 🔥",
+    "Small progress is still progress. You're building something real. 📈",
+    "The version of you from a month ago would be proud. Keep going. ⭐",
+]
+
+async def send_daily_reports(user_ids: list[int]) -> None:
+    """
+    DMs every user who studied today a personalised end-of-day report embed
+    with their stats image (pie chart by tag + 7-day bar chart).
+    """
+    today_str = datetime.now(timezone.utc).strftime("%d/%m/%Y")
+
+    for userID in user_ids:
+        try:
+            user = bot.get_user(userID)
+            if not user:
+                try:
+                    user = await bot.fetch_user(userID)
+                except Exception:
+                    continue
+
+            # ── Gather data ──────────────────────────────────────────────
+            daily_secs   = getUserDailyTime(userID)
+            tag_times    = getUserTagTimes(userID)       # [(tag, total_secs), ...]
+            history      = get_last_7_days(userID)       # [(date, secs), ...] len=7
+            streak_info  = get_streak_info(userID)
+
+            hours_today  = daily_secs / 3600
+            time_str     = f"{int(hours_today)}h {int((hours_today % 1) * 60)}m" \
+                           if hours_today >= 1 else \
+                           f"{int(daily_secs // 60)}m"
+
+            # ── Generate stats image in executor ─────────────────────────
+            stats_buffer = await bot.loop.run_in_executor(
+                None, generate_stats_image, tag_times, history
+            )
+
+            # ── Fetch user avatar ─────────────────────────────────────────
+            avatar_url = user.display_avatar.url
+
+            # ── Build embed ───────────────────────────────────────────────
+            motivational = random.choice(MOTIVATIONAL_LINES)
+            streak_val   = streak_info.get("streak", 0)
+            streak_line  = f"🔥 Current streak: **{streak_val} day{'s' if streak_val != 1 else ''}**" \
+                           if streak_val > 0 else ""
+
+            embed = discord.Embed(
+                color=discord.Color.from_rgb(240, 165, 0),   # gold accent
+                timestamp=datetime.now(timezone.utc)
+            )
+
+            embed.description = (
+                f"**Great work for the day! You've studied {time_str} on SISB.**\n\n"
+                f"Hope you ended this day on a high note. Here is your report for the day, "
+                f"here's to hoping you will aim to do more. 🌙\n\n"
+                f"{motivational}\n\n"
+                + (f"{streak_line}\n\n" if streak_line else "")
+                + f"Thank you for using SISB today, as always:\n"
+                  f"*\"Stay consistent, Do more, Be better\"* 🧡"
+            )
+
+            embed.set_author(
+                name=f"Dear @{user.name}",
+                icon_url=avatar_url
+            )
+
+            embed.set_image(url="attachment://daily_stats.png")
+
+            embed.set_footer(
+                text=f"Team South Indian Study Buddies  •  {today_str}"
+            )
+
+            stats_file = discord.File(fp=stats_buffer, filename="daily_stats.png")
+
+            await user.send(embed=embed, file=stats_file)
+            print(f"📬 Report sent to {user.name} ({userID})")
+
+        except discord.Forbidden:
+            print(f"⚠️ Could not DM user {userID} — DMs closed")
+        except Exception as e:
+            print(f"❌ Error sending report to {userID}: {e}")
+
 # ==========================================
 #  SCHEDULED TASKS
 # ==========================================
@@ -1232,8 +1319,24 @@ async def midnight_maintenance():
     for userID, start_time in list(voiceTrack.items()):
         duration = (current_time - start_time).total_seconds()
         SaveUserTime(userID, duration)
+        tag = getActiveTag(userID)
+        if tag:
+            SaveUserTimeByTag(userID, tag, duration)
         voiceTrack[userID] = current_time
     save_voice_sessions(voiceTrack)
+
+    # ── Snapshot today's time for each user BEFORE the reset ──
+    conn_snap = sqlite3.connect('userTimeUsage.db')
+    snap_cursor = conn_snap.cursor()
+    snap_cursor.execute('SELECT userID FROM userTime WHERE daily_time > 0')
+    active_today = [row[0] for row in snap_cursor.fetchall()]
+    conn_snap.close()
+
+    for userID in active_today:
+        snapshotDailyTime(userID)
+
+    # ── Send DM report to every user who studied today ──
+    await send_daily_reports(active_today)
 
     conn_lb = sqlite3.connect('userTimeUsage.db')
     cursor_lb = conn_lb.cursor()
@@ -1442,6 +1545,7 @@ async def on_ready():
     setupRepDB()
     setupTagsDB()
     setupTagTimeDB()
+    setupDailyHistoryDB()
     
     # Start scheduled tasks
     if not midnight_maintenance.is_running():

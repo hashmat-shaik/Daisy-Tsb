@@ -263,3 +263,72 @@ def getUserTagTimes(userID: int) -> list[tuple[str, float]]:
     result = cursor.fetchall()
     connection.close()
     return result
+
+# ==========================================
+#  DAILY HISTORY  (for 7-day bar chart)
+# ==========================================
+
+def setupDailyHistoryDB():
+    """Creates userDailyHistory table — one row per user per date."""
+    connection = sqlite3.connect('userTimeUsage.db')
+    cursor = connection.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS userDailyHistory (
+            userID  INTEGER NOT NULL,
+            date    TEXT    NOT NULL,   -- YYYY-MM-DD
+            seconds REAL    DEFAULT 0,
+            PRIMARY KEY (userID, date)
+        )
+    ''')
+    connection.commit()
+    connection.close()
+
+
+def snapshotDailyTime(userID: int) -> None:
+    """
+    Called at end-of-day (before the daily_time reset).
+    Records today's daily_time into the history table.
+    """
+    connection = sqlite3.connect('userTimeUsage.db')
+    cursor = connection.cursor()
+
+    cursor.execute('SELECT daily_time FROM userTime WHERE userID = ?', (userID,))
+    result = cursor.fetchone()
+    daily_seconds = result[0] if result else 0
+
+    today = datetime.utcnow().strftime('%Y-%m-%d')
+
+    cursor.execute('''
+        INSERT INTO userDailyHistory (userID, date, seconds)
+        VALUES (?, ?, ?)
+        ON CONFLICT(userID, date) DO UPDATE SET seconds = excluded.seconds
+    ''', (userID, today, daily_seconds))
+
+    connection.commit()
+    connection.close()
+
+
+def get_last_7_days(userID: int) -> list[tuple[str, float]]:
+    """
+    Returns the last 7 days of history for a user as [(date_str, seconds), ...],
+    oldest first. Missing days are filled with 0 so the bar chart always has 7 bars.
+    """
+    connection = sqlite3.connect('userTimeUsage.db')
+    cursor = connection.cursor()
+
+    # Pull up to 7 rows, most recent first
+    cursor.execute('''
+        SELECT date, seconds FROM userDailyHistory
+        WHERE userID = ?
+        ORDER BY date DESC
+        LIMIT 7
+    ''', (userID,))
+    rows = {row[0]: row[1] for row in cursor.fetchall()}
+    connection.close()
+
+    result = []
+    for i in range(6, -1, -1):   # 6 days ago → today
+        d = (datetime.utcnow() - timedelta(days=i)).strftime('%Y-%m-%d')
+        result.append((d, rows.get(d, 0.0)))
+
+    return result
