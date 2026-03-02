@@ -1161,9 +1161,7 @@ async def send_daily_reports(user_ids: list[int]) -> None:
                            f"{int(daily_secs // 60)}m"
 
             # ── Generate stats image in executor ─────────────────────────
-            stats_buffer = await bot.loop.run_in_executor(
-                None, generate_stats_image, tag_times, history
-            )
+            stats_buffer = await asyncio.to_thread(generate_stats_image, tag_times, history)
 
             # ── Fetch user avatar ─────────────────────────────────────────
             avatar_url = user.display_avatar.url
@@ -1520,45 +1518,37 @@ async def remove_tag(interaction: discord.Interaction, tag: str):
 @bot.tree.command(name="test_report", description="DEV ONLY: Preview your nightly DM report")
 async def test_report(interaction: discord.Interaction):
     if interaction.user.id != 617279634915983390:
-        return await interaction.response.send_message("Too bad, you're not Aurous :( ", ephemeral=True)
+        return await interaction.response.send_message("Too bad, you're not Aurous :(", ephemeral=True)
 
     await interaction.response.defer(ephemeral=True)
 
     userID = interaction.user.id
     user   = interaction.user
 
-    # Pull real data for your own account
     daily_secs  = getUserDailyTime(userID)
     tag_times   = getUserTagTimes(userID)
     history     = get_last_7_days(userID)
     streak_info = get_streak_info(userID)
 
-    # If you haven't studied today, fake some data so the chart isn't empty
     if daily_secs == 0:
-        daily_secs = 20700   # 5h 45m
+        daily_secs = 20700
         tag_times  = [('Python', 10800), ('Math', 5400), ('Biology', 2700), ('Physics', 1800)]
-        from datetime import timedelta
         history = [
             ((datetime.now(timezone.utc) - timedelta(days=i)).strftime('%Y-%m-%d'), 3600 * (7 - i))
             for i in range(6, -1, -1)
         ]
 
     hours_today = daily_secs / 3600
-    time_str    = f"{int(hours_today)}h {int((hours_today % 1) * 60)}m" \
-                  if hours_today >= 1 else f"{int(daily_secs // 60)}m"
+    time_str = f"{int(hours_today)}h {int((hours_today % 1) * 60)}m" \
+               if hours_today >= 1 else f"{int(daily_secs // 60)}m"
 
-    stats_buffer = await bot.loop.run_in_executor(
-        None, generate_stats_image, tag_times, history
-    )
+    stats_buffer = await asyncio.to_thread(generate_stats_image, tag_times, history)
 
     streak_val  = streak_info.get("streak", 0)
     streak_line = f"🔥 Current streak: **{streak_val} day{'s' if streak_val != 1 else ''}**\n\n" \
                   if streak_val > 0 else ""
 
-    embed = discord.Embed(
-        color=discord.Color.from_rgb(240, 165, 0),
-        timestamp=datetime.now(timezone.utc)
-    )
+    embed = discord.Embed(color=discord.Color.from_rgb(240, 165, 0), timestamp=datetime.now(timezone.utc))
     embed.set_author(name=f"Dear @{user.name}", icon_url=user.display_avatar.url)
     embed.description = (
         f"**Great work for the day! You've studied {time_str} on SISB.**\n\n"
