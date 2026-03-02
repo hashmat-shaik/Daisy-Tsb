@@ -1126,11 +1126,11 @@ async def streak_img_lb(interaction: discord.Interaction):
         print(f"❌ CRITICAL ERROR: {e}")
         await interaction.followup.send(f"An error occurred: {str(e)}")
 MOTIVATIONAL_LINES = [
-    "Every hour you put in today is a brick.\nYou might not see the building yet — but it's going up. 🏗️",
-    "Whether today was a 10/10 grind or barely getting through — you showed up.\nThat already puts you ahead. 💪",
-    "Consistency over intensity. Keep stacking the days. 🔥",
-    "Small progress is still progress. You're building something real. 📈",
-    "The version of you from a month ago would be proud. Keep going. ⭐",
+    "Every hour you put in today is a brick.\nYou might not see the building yet but it's going up.",
+    "Whether today was a 10/10 grind or barely getting through, you showed up.\nThat already puts you ahead of 99% peopple.",
+    "Consistency over intensity. Keep stacking the days.",
+    "Small progress is still progress. You're building something real.",
+    "The version of you from a month ago would be proud. Keep going.",
 ]
 
 async def send_daily_reports(user_ids: list[int]) -> None:
@@ -1179,11 +1179,11 @@ async def send_daily_reports(user_ids: list[int]) -> None:
 
             embed.description = (
                 f"**Great work for the day! You've studied {time_str} on SISB.**\n\n"
-                f"Hope you ended this day on a high note. Here is your report for the day, "
-                f"here's to hoping you will aim to do more. 🌙\n\n"
+                f"Here's your yesterday's report, Hope it was up to your expectations. "
+                f"In any case, we can do better today! 🌙\n\n"
                 f"{motivational}\n\n"
                 + (f"{streak_line}\n\n" if streak_line else "")
-                + f"Thank you for using SISB today, as always:\n"
+                + f"Thank you for using SISB, as always:\n"
                   f"*\"Stay consistent, Do more, Be better\"* 🧡"
             )
 
