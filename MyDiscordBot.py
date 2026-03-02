@@ -1513,6 +1513,7 @@ async def remove_tag(interaction: discord.Interaction, tag: str):
             ephemeral=True
         )
         
+
 ## TEST
 
 @bot.tree.command(name="test_report", description="DEV ONLY: Preview your nightly DM report")
@@ -1521,15 +1522,27 @@ async def test_report(interaction: discord.Interaction):
         return await interaction.response.send_message("Too bad, you're not Aurous :(", ephemeral=True)
 
     await interaction.response.defer(ephemeral=True)
+    print("🧪 test_report: deferred")
 
     userID = interaction.user.id
     user   = interaction.user
 
-    daily_secs  = getUserDailyTime(userID)
-    tag_times   = getUserTagTimes(userID)
-    history     = get_last_7_days(userID)
-    streak_info = get_streak_info(userID)
+    # ── Step 1: DB reads ──────────────────────────────────────────────────────
+    print("🧪 test_report: reading DB...")
+    try:
+        daily_secs  = getUserDailyTime(userID)
+        print(f"🧪 daily_secs={daily_secs}")
+        tag_times   = getUserTagTimes(userID)
+        print(f"🧪 tag_times={tag_times}")
+        history     = get_last_7_days(userID)
+        print(f"🧪 history={history}")
+        streak_info = get_streak_info(userID)
+        print(f"🧪 streak_info={streak_info}")
+    except Exception as e:
+        print(f"❌ DB read failed: {e}")
+        return await interaction.followup.send(f"DB error: {e}", ephemeral=True)
 
+    # ── Step 2: fake data if no study time today ──────────────────────────────
     if daily_secs == 0:
         daily_secs = 20700
         tag_times  = [('Python', 10800), ('Math', 5400), ('Biology', 2700), ('Physics', 1800)]
@@ -1537,13 +1550,24 @@ async def test_report(interaction: discord.Interaction):
             ((datetime.now(timezone.utc) - timedelta(days=i)).strftime('%Y-%m-%d'), 3600 * (7 - i))
             for i in range(6, -1, -1)
         ]
+        print("🧪 using fake data")
 
     hours_today = daily_secs / 3600
     time_str = f"{int(hours_today)}h {int((hours_today % 1) * 60)}m" \
                if hours_today >= 1 else f"{int(daily_secs // 60)}m"
 
-    stats_buffer = await asyncio.to_thread(generate_stats_image, tag_times, history)
+    # ── Step 3: generate image (direct call — no threading) ───────────────────
+    print("🧪 test_report: generating image...")
+    try:
+        stats_buffer = generate_stats_image(tag_times, history)
+        print("🧪 image generated OK")
+    except Exception as e:
+        print(f"❌ Image generation failed: {e}")
+        import traceback; traceback.print_exc()
+        return await interaction.followup.send(f"Image error: {e}", ephemeral=True)
 
+    # ── Step 4: build embed ───────────────────────────────────────────────────
+    print("🧪 test_report: building embed...")
     streak_val  = streak_info.get("streak", 0)
     streak_line = f"🔥 Current streak: **{streak_val} day{'s' if streak_val != 1 else ''}**\n\n" \
                   if streak_val > 0 else ""
@@ -1562,14 +1586,19 @@ async def test_report(interaction: discord.Interaction):
     )
     embed.set_image(url="attachment://daily_stats.png")
     embed.set_footer(text=f"Team South Indian Study Buddies  •  {datetime.now(timezone.utc).strftime('%d/%m/%Y')}")
-
     stats_file = discord.File(fp=stats_buffer, filename="daily_stats.png")
 
+    # ── Step 5: send DM ───────────────────────────────────────────────────────
+    print("🧪 test_report: sending DM...")
     try:
         await user.send(embed=embed, file=stats_file)
+        print("🧪 DM sent OK")
         await interaction.followup.send("✅ Report sent to your DMs!", ephemeral=True)
     except discord.Forbidden:
-        await interaction.followup.send("❌ Your DMs are closed. Open them and try again.", ephemeral=True)
+        await interaction.followup.send("❌ Your DMs are closed.", ephemeral=True)
+    except Exception as e:
+        print(f"❌ Send failed: {e}")
+        await interaction.followup.send(f"Send error: {e}", ephemeral=True)
 
 # ==========================================
 #  BOT READY EVENT - MUST BE AFTER ALL COMMANDS
