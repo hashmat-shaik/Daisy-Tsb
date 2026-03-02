@@ -1596,17 +1596,17 @@ async def test_report(interaction: discord.Interaction):
     embed = discord.Embed(color=discord.Color.from_rgb(240, 165, 0), timestamp=datetime.now(timezone.utc))
     embed.set_author(name=f"Dear @{user.name}", icon_url=user.display_avatar.url)
     embed.description = (
-        f"**Great work for the day! You've studied {time_str} on SISB.**\n\n"
+        f"**Great work for the day! You've studied {time_str} on TSB.**\n\n"
         f"Hope you ended this day on a high note. Here is your report for the day, "
         f"here's to hoping you will aim to do more. 🌙\n\n"
         f"Every hour you put in today is a brick.\n"
-        f"You might not see the building yet — but it's going up. 🏗️\n\n"
+        f"You might not see the building yet, but it's going up. 🏗️\n\n"
         f"{streak_line}"
-        f"Thank you for using SISB today, as always:\n"
+        f"Thank you for using Telugu Study Buddies today, as always:\n"
         f"*\"Stay consistent, Do more, Be better\"* 🧡"
     )
     embed.set_image(url="attachment://daily_stats.png")
-    embed.set_footer(text=f"Team South Indian Study Buddies  •  {datetime.now(timezone.utc).strftime('%d/%m/%Y')}")
+    embed.set_footer(text=f"Team Telugu Study Buddies  •  {datetime.now(timezone.utc).strftime('%d/%m/%Y')}")
     stats_file = discord.File(fp=stats_buffer, filename="daily_stats.png")
 
     # ── Step 5: send DM ───────────────────────────────────────────────────────
