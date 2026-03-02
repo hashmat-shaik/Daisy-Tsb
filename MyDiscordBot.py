@@ -1221,96 +1221,113 @@ PING_ROLE_ID = 1474670431167451257
 @tasks.loop(time=MAINTENANCE_TIME)
 async def midnight_maintenance():
     print("🕛 4:55 AM IST: RUNNING MAINTENANCE & STREAK UPDATES")
-    
-    task_conn = sqlite3.connect('userTaskList.db')
-    time_conn = sqlite3.connect('userTimeUsage.db')
-    
-    task_cursor = task_conn.cursor()
-    time_cursor = time_conn.cursor()
+    try:
+        task_conn = sqlite3.connect('userTaskList.db')
+        time_conn = sqlite3.connect('userTimeUsage.db')
+        task_cursor = task_conn.cursor()
+        time_cursor = time_conn.cursor()
 
-    task_cursor.execute("SELECT userID, tasks FROM userTasks")
-    all_users = task_cursor.fetchall()
-    user_tasks_map = {}
-    for userID, tasks_json in all_users:
-        # Keep the row with the longest string (most tasks) to avoid empty duplicates
-        if userID not in user_tasks_map or len(tasks_json) > len(user_tasks_map[userID]):
-            user_tasks_map[userID] = tasks_json
+        # ── Bug fix: iterate user_tasks_map not all_users (deduplicates) ──
+        task_cursor.execute("SELECT userID, tasks FROM userTasks")
+        all_users = task_cursor.fetchall()
+        user_tasks_map = {}
+        for userID, tasks_json in all_users:
+            if userID not in user_tasks_map or len(tasks_json) > len(user_tasks_map[userID]):
+                user_tasks_map[userID] = tasks_json
 
-    yesterday_str = (datetime.now(timezone.utc) - timedelta(days=1)).strftime('%Y-%m-%d')
+        yesterday_str = (datetime.now(timezone.utc) - timedelta(days=1)).strftime('%Y-%m-%d')
 
-    for userID, tasks_json in user_tasks_map.items():
+        for userID, tasks_json in user_tasks_map.items():
+            try:
+                data = json.loads(tasks_json)
+                journal_tasks = data.get("journal", [])
+                daily_tasks = data.get("daily", [])
+
+                if not journal_tasks and not daily_tasks:
+                    is_eligible = False
+                else:
+                    journal_done = all(t.get('completed', False) for t in journal_tasks)
+                    daily_done = all(t.get('completed', False) for t in daily_tasks)
+                    is_eligible = journal_done and daily_done
+
+                if is_eligible:
+                    time_cursor.execute('''
+                        UPDATE userTime
+                        SET current_streak = COALESCE(current_streak, 0) + 1,
+                            streak_status = 'ACTIVE',
+                            last_completion_date = ?
+                        WHERE userID = ?
+                    ''', (yesterday_str, userID))
+                else:
+                    time_cursor.execute('''
+                        UPDATE userTime
+                        SET current_streak = 0,
+                            streak_status = 'INACTIVE'
+                        WHERE userID = ?
+                    ''', (userID,))
+
+                for t in journal_tasks:
+                    t['completed'] = False
+
+                new_tasks_data = json.dumps({"journal": journal_tasks, "daily": []})
+                task_cursor.execute("UPDATE userTasks SET tasks = ? WHERE userID = ?", (new_tasks_data, userID))
+
+            except Exception as e:
+                print(f"Error processing user {userID}: {e}")
+
+        task_conn.commit()
+        time_conn.commit()
+        task_conn.close()
+        time_conn.close()
+        print("✅ Streak + task reset done.")
+
+        # ── Flush active voice sessions ──
+        current_time = datetime.now(timezone.utc)
+        for userID, start_time in list(voiceTrack.items()):
+            duration = (current_time - start_time).total_seconds()
+            SaveUserTime(userID, duration)
+            tag = getActiveTag(userID)
+            if tag:
+                SaveUserTimeByTag(userID, tag, duration)
+            voiceTrack[userID] = current_time
+        save_voice_sessions(voiceTrack)
+        print("✅ Voice sessions flushed.")
+
+        # ── Collect users who studied today (before reset) ──
+        conn_snap = sqlite3.connect('userTimeUsage.db')
+        snap_cursor = conn_snap.cursor()
+        snap_cursor.execute('SELECT userID FROM userTime WHERE daily_time > 0')
+        active_today = [row[0] for row in snap_cursor.fetchall()]
+        conn_snap.close()
+        print(f"📋 {len(active_today)} users studied today.")
+
+        # ── Snapshot each user's daily_time into history ──
+        for userID in active_today:
+            try:
+                snapshotDailyTime(userID)
+            except Exception as e:
+                print(f"❌ Snapshot error for {userID}: {e}")
+        print("✅ Daily history snapshots saved.")
+
+        # ── Reset daily leaderboard BEFORE sending DMs ──
+        # (DM report reads from snapshot history, not daily_time, so order is safe)
+        conn_lb = sqlite3.connect('userTimeUsage.db')
+        cursor_lb = conn_lb.cursor()
+        cursor_lb.execute('UPDATE userTime SET daily_time = 0')
+        conn_lb.commit()
+        conn_lb.close()
+        print("✅ Daily leaderboard reset.")
+
+        # ── Send DM reports (isolated — a crash here won't affect anything above) ──
         try:
-            data = json.loads(tasks_json)
-            journal_tasks = data.get("journal", [])
-            daily_tasks = data.get("daily", [])
-
-            if not journal_tasks and not daily_tasks:
-                is_eligible = False
-            else:
-                journal_done = all(t.get('completed', False) for t in journal_tasks)
-                daily_done = all(t.get('completed', False) for t in daily_tasks)
-                is_eligible = journal_done and daily_done
-
-            if is_eligible:
-                time_cursor.execute('''
-                    UPDATE userTime 
-                    SET current_streak = COALESCE(current_streak, 0) + 1,  
-                        streak_status = 'ACTIVE',
-                        last_completion_date = ?
-                    WHERE userID = ?
-                ''', (yesterday_str, userID))
-            else:
-                time_cursor.execute('''
-                    UPDATE userTime 
-                    SET current_streak = 0, 
-                        streak_status = 'INACTIVE'
-                    WHERE userID = ?
-                ''', (userID,))
-
-            for t in journal_tasks:
-                t['completed'] = False
-            
-            new_tasks_data = json.dumps({"journal": journal_tasks, "daily": []})
-            task_cursor.execute("UPDATE userTasks SET tasks = ? WHERE userID = ?", (new_tasks_data, userID))
-            
+            await send_daily_reports(active_today)
         except Exception as e:
-            print(f"Error processing user {userID}: {e}")
+            print(f"❌ send_daily_reports crashed: {e}")
+            import traceback; traceback.print_exc()
 
-    task_conn.commit()
-    time_conn.commit()
-    task_conn.close()
-    time_conn.close()
-
-    current_time = datetime.now(timezone.utc)
-    
-    for userID, start_time in list(voiceTrack.items()):
-        duration = (current_time - start_time).total_seconds()
-        SaveUserTime(userID, duration)
-        tag = getActiveTag(userID)
-        if tag:
-            SaveUserTimeByTag(userID, tag, duration)
-        voiceTrack[userID] = current_time
-    save_voice_sessions(voiceTrack)
-
-    # ── Snapshot today's time for each user BEFORE the reset ──
-    conn_snap = sqlite3.connect('userTimeUsage.db')
-    snap_cursor = conn_snap.cursor()
-    snap_cursor.execute('SELECT userID FROM userTime WHERE daily_time > 0')
-    active_today = [row[0] for row in snap_cursor.fetchall()]
-    conn_snap.close()
-
-    for userID in active_today:
-        snapshotDailyTime(userID)
-
-    # ── Send DM report to every user who studied today ──
-    await send_daily_reports(active_today)
-
-    conn_lb = sqlite3.connect('userTimeUsage.db')
-    cursor_lb = conn_lb.cursor()
-    cursor_lb.execute('UPDATE userTime SET daily_time = 0')
-    conn_lb.commit()
-    conn_lb.close()
-    print("✅ Daily leaderboard reset.")
+    except Exception as e:
+        print(f"❌ CRITICAL: midnight_maintenance failed: {e}")
+        import traceback; traceback.print_exc()
 
 @tasks.loop(time=DAILY_TIME)
 async def post_daily_streak():
@@ -1350,7 +1367,7 @@ async def post_daily_streak():
         final_buffer = await bot.loop.run_in_executor(None, draw_streak_leaderboard, processed_users)
         file = discord.File(fp=final_buffer, filename="daily_streak.png")
 
-        await channel.send(f"<@&{PING_ROLE_ID}> 🔥 Daily Streak Leaderboard 🔥\nKeep the grind going!", file=file)
+        await channel.send(f"<@&{PING_ROLE_ID}> \n**Daily Streak Leaderboard** \nKeep the grind going!", file=file)
         
     except Exception as e:
         print(f"Error generating daily streak: {e}")
@@ -1497,6 +1514,72 @@ async def remove_tag(interaction: discord.Interaction, tag: str):
             "❌ You don't have any tags yet. Add one with `/add_tag`.",
             ephemeral=True
         )
+        
+## TEST
+
+@bot.tree.command(name="test_report", description="DEV ONLY: Preview your nightly DM report")
+async def test_report(interaction: discord.Interaction):
+    if interaction.user.id != 617279634915983390:
+        return await interaction.response.send_message("Too bad, you're not Aurous :( ", ephemeral=True)
+
+    await interaction.response.defer(ephemeral=True)
+
+    userID = interaction.user.id
+    user   = interaction.user
+
+    # Pull real data for your own account
+    daily_secs  = getUserDailyTime(userID)
+    tag_times   = getUserTagTimes(userID)
+    history     = get_last_7_days(userID)
+    streak_info = get_streak_info(userID)
+
+    # If you haven't studied today, fake some data so the chart isn't empty
+    if daily_secs == 0:
+        daily_secs = 20700   # 5h 45m
+        tag_times  = [('Python', 10800), ('Math', 5400), ('Biology', 2700), ('Physics', 1800)]
+        from datetime import timedelta
+        history = [
+            ((datetime.now(timezone.utc) - timedelta(days=i)).strftime('%Y-%m-%d'), 3600 * (7 - i))
+            for i in range(6, -1, -1)
+        ]
+
+    hours_today = daily_secs / 3600
+    time_str    = f"{int(hours_today)}h {int((hours_today % 1) * 60)}m" \
+                  if hours_today >= 1 else f"{int(daily_secs // 60)}m"
+
+    stats_buffer = await bot.loop.run_in_executor(
+        None, generate_stats_image, tag_times, history
+    )
+
+    streak_val  = streak_info.get("streak", 0)
+    streak_line = f"🔥 Current streak: **{streak_val} day{'s' if streak_val != 1 else ''}**\n\n" \
+                  if streak_val > 0 else ""
+
+    embed = discord.Embed(
+        color=discord.Color.from_rgb(240, 165, 0),
+        timestamp=datetime.now(timezone.utc)
+    )
+    embed.set_author(name=f"Dear @{user.name}", icon_url=user.display_avatar.url)
+    embed.description = (
+        f"**Great work for the day! You've studied {time_str} on SISB.**\n\n"
+        f"Hope you ended this day on a high note. Here is your report for the day, "
+        f"here's to hoping you will aim to do more. 🌙\n\n"
+        f"Every hour you put in today is a brick.\n"
+        f"You might not see the building yet — but it's going up. 🏗️\n\n"
+        f"{streak_line}"
+        f"Thank you for using SISB today, as always:\n"
+        f"*\"Stay consistent, Do more, Be better\"* 🧡"
+    )
+    embed.set_image(url="attachment://daily_stats.png")
+    embed.set_footer(text=f"Team South Indian Study Buddies  •  {datetime.now(timezone.utc).strftime('%d/%m/%Y')}")
+
+    stats_file = discord.File(fp=stats_buffer, filename="daily_stats.png")
+
+    try:
+        await user.send(embed=embed, file=stats_file)
+        await interaction.followup.send("✅ Report sent to your DMs!", ephemeral=True)
+    except discord.Forbidden:
+        await interaction.followup.send("❌ Your DMs are closed. Open them and try again.", ephemeral=True)
 
 # ==========================================
 #  BOT READY EVENT - MUST BE AFTER ALL COMMANDS
