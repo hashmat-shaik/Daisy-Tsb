@@ -65,6 +65,7 @@ def _short_date(date_str: str) -> str:
 def generate_stats_image(
     tag_times: list[tuple[str, float]],       # [(tag, seconds), ...]
     daily_history: list[tuple[str, float]],   # [(YYYY-MM-DD, seconds), ...] len=7
+    daily_secs: float = None,                 # today's total seconds — used for centre label
 ) -> io.BytesIO:
     """
     Renders the stats card and returns a BytesIO PNG buffer.
@@ -113,6 +114,9 @@ def generate_stats_image(
 
         total = sum(sizes)
 
+        # FIX B10: use daily_secs if provided — tag_times is all-time, not just today
+        center_secs = daily_secs if daily_secs is not None else total
+
         wedges, _ = ax_pie.pie(
             sizes,
             colors=colors,
@@ -121,9 +125,9 @@ def generate_stats_image(
             pctdistance=0.78,
         )
 
-        # Centre label — total time
+        # Centre label — daily time  # FIX B10
         ax_pie.text(
-            0, 0.06, _format_hours(total),
+            0, 0.06, _format_hours(center_secs),
             ha="center", va="center",
             fontsize=15, color=TEXT_PRIMARY, fontweight="bold"
         )
